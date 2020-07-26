@@ -34,11 +34,10 @@ public class TextTokenizer {
         return instance;
     }
 
-    public List<String> tokenize(String fileName) {
-        File file = new File(fileName);
+    public List<String> tokenize(String linestr) {
         List<String> list = new LinkedList<>();
 
-        try(Reader reader = new FileReader(file)) {
+        try(Reader reader = new StringReader(linestr)) {
             TokenStream ts = analyzer.tokenStream("", reader);
             CharTermAttribute cta = ts.addAttribute(CharTermAttribute.class);
             ts.reset();
@@ -47,7 +46,7 @@ public class TextTokenizer {
             }
             ts.close();
         }catch (IOException e) {
-            Logger.getAnonymousLogger().log(Level.SEVERE, "cannot read this file:" + fileName);
+            Logger.getAnonymousLogger().log(Level.SEVERE, "cannot read this linestr:" + linestr);
         }
         return list;
     }

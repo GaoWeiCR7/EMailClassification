@@ -18,8 +18,7 @@ public class KNN {
     /**
      * 用于保存训练集数据
      */
-    private static TreeMap<FileBean, TreeMap<String, Double>> train = new TreeMap<>();
-    private ArrayList<FileBean> result = new ArrayList<>();
+    private static List<FileBean> train = new LinkedList<>();
     private static final double MIN_DIFF = 10E-5;
 
     /**
@@ -30,6 +29,7 @@ public class KNN {
         String className;
         String fileName;
         double distance;
+        TreeMap<String, Double> tfidf;
 
         public FileBean(String className, double distance) {
             this.className = className;
@@ -52,6 +52,14 @@ public class KNN {
         public double getDistance() {
             return distance;
         }
+
+        public void setTfidf(TreeMap<String, Double> tfidf) {
+            this.tfidf = tfidf;
+        }
+
+        public TreeMap<String, Double> getTfidf() {
+            return tfidf;
+        }
     }
 
     public static class KNNMapper extends Mapper<Object, Text, Text, Text> {
@@ -66,65 +74,54 @@ public class KNN {
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             String idffilefolder = context.getProfileParams();
-            FileSystem temp = FileSystem.get(URI.create(idffilefolder),context.getConfiguration());
+            FileSystem temp = FileSystem.get(URI.create(idffilefolder), context.getConfiguration());
             FileStatus[] res = temp.listStatus(new Path(idffilefolder));
-            Path []paths =  FileUtil.stat2Paths(res);
-            for(Path p:paths)
-            {
-                System.err.println(p);
+            Path[] paths = FileUtil.stat2Paths(res);
+
+            FileBean fileBean = null;
+            for (Path p : paths) {
                 FSDataInputStream inStream = FileSystem.get(context.getConfiguration()).open(p);
-                while(inStream.available() > 0)
-                {
+                while (inStream.available() > 0) {
                     String msg = inStream.readLine();
                     String[] keyValue = msg.split("\\s+");
-                    String name = keyValue[0].split("\\.")[0];
+                    String name = new String(keyValue[0]);
 
-                    FileBean fileBean = new FileBean(name.split("#")[0], name.split("#")[1]);
+                    String[] classFileName = name.split("#");
+                    fileBean = new FileBean(new String(classFileName[0]).intern(), new String(classFileName[1]).intern());
                     TreeMap<String, Double> singleFileTFIDF = new TreeMap<>();
                     for (int i = 1; i < keyValue.length; i++) {
                         String[] unit = keyValue[i].split(":");
-                        singleFileTFIDF.put(unit[0], Double.parseDouble(unit[1]));
+                        singleFileTFIDF.put(new String(unit[0]).intern(), Double.parseDouble(unit[1]));
                     }
-                    train.put(fileBean, singleFileTFIDF);
+                    fileBean.setTfidf(singleFileTFIDF);
+                    train.add(fileBean);
                 }
             }
-
-            /*try(BufferedReader in = new BufferedReader(new FileReader(fileName))) {
-                String msg;
-                while ((msg = in.readLine()) != null) {
-                    String[] keyValue = msg.split("\\s+");
-                    String name = keyValue[0].split("\\.")[0];
-
-                    FileBean fileBean = new FileBean(name.split("#")[0], name.split("#")[1]);
-                    TreeMap<String, Double> singleFileTFIDF = new TreeMap<>();
-                    for (int i = 1; i < keyValue.length; i++) {
-                        String[] unit = keyValue[i].split(":");
-                        singleFileTFIDF.put(unit[0], Double.parseDouble(unit[1]));
-                    }
-                    train.put(fileBean, singleFileTFIDF);
-                }
-            }catch (IOException e) {
-                e.printStackTrace();
-            }*/
         }
 
         @Override
         protected void map(Object key, Text value, Context context) throws IOException, InterruptedException {
             String[] keyValue = value.toString().split("\\s+");
-            String fileName = keyValue[0].split("\\.")[0].split("#")[1];
+            String fileName = new String(keyValue[0]);
             TreeMap<String, Double> tfidf = new TreeMap<>();
             for (int i = 1; i < keyValue.length; i++) {
                 String[] unit = keyValue[i].split(":");
-                tfidf.put(unit[0], Double.parseDouble(unit[1]));
+                tfidf.put(new String(unit[0]).intern(), Double.parseDouble(unit[1]));
             }
-            Set<Map.Entry<FileBean, TreeMap<String, Double>>> trainSet = train.entrySet();
 
-            //存储在一个优先级队列中
-            Queue<FileBean> topK = new PriorityQueue<>(comparator);
-            for (Map.Entry<FileBean, TreeMap<String, Double>> me : trainSet) {
-                double retTFIDF = DistanceUtils.cosineDistance(me.getValue(), tfidf);
-                me.getKey().setDistance(retTFIDF);
-                topK.add(me.getKey());
+            //存储在一个优先级队列中,堆顶存放distance最大的元素
+            Queue<FileBean> topK = new PriorityQueue<>(K_NEIGHBOR, comparator);
+            for (FileBean word : train) {
+                word.setDistance(DistanceUtils.cosineDistance(word.getTfidf(), tfidf));
+                if (topK.size() < K_NEIGHBOR) {
+                    topK.add(word);
+                }else {
+                    if (topK.peek().getDistance() > word.getDistance()) {
+                        //距离比堆顶元素小
+                        topK.remove();
+                        topK.add(word);
+                    }
+                }
             }
 
             TreeMap<String, Integer> vote = new TreeMap<>();
@@ -140,13 +137,12 @@ public class KNN {
                 }
             }
 
-            Set<Map.Entry<String, Integer>> selectBest = vote.entrySet();
             int maxNum = -1;
             String targetClassName = null;
-            for (Map.Entry<String, Integer> me : selectBest) {
-                if (maxNum < me.getValue()) {
-                    maxNum = me.getValue();
-                    targetClassName = me.getKey();
+            for (String className : vote.keySet()) {
+                if (maxNum < vote.get(className)) {
+                    maxNum = vote.get(className);
+                    targetClassName = className;
                 }
             }
             //输出类名
@@ -157,8 +153,8 @@ public class KNN {
          * 比较器，降序排列
          */
         static Comparator<FileBean> comparator = (o1, o2) -> {
-            double diff = o1.getDistance() - o2.getDistance();
-            return Double.compare(MIN_DIFF, Math.abs(diff));
+            double diff = o2.getDistance() - o1.getDistance();
+            return Double.compare(diff, MIN_DIFF);
         };
     }
 }
